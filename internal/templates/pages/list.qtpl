@@ -69,7 +69,6 @@
                     sb.WriteString(`/edit" class="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300">Edit<span class="sr-only">, `)
                     sb.WriteString(item.Title)
                     sb.WriteString(`</span></a>
-                            {# Add delete functionality later #}
                         </td>
                     </tr>`)
                 }
