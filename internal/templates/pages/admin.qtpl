@@ -6,15 +6,14 @@
     type AdminData = models.BasePageData
 %}
 
-{# AdminPage renders the admin placeholder page. #}
 {% func AdminPage(data *AdminData) %}
     {% code
         pageContent := func() string {
             var sb strings.Builder
-            sb.WriteString(`<div class="text-center py-16">`)
-            sb.WriteString(`<h1 class="text-4xl font-bold text-gray-700 mb-4">Admin Panel</h1>`)
-            sb.WriteString(`<p class="text-lg text-gray-500">Coming Soon</p>`)
-            sb.WriteString(`</div>`)
+            sb.WriteString(`<div class="text-center py-16 sm:py-24">
+                    <h1 class="text-4xl font-bold text-gray-700 dark:text-gray-200 mb-4">Admin Panel</h1>
+                    <p class="text-lg text-gray-500 dark:text-gray-400">This page is under construction.</p>
+                </div>`)
             return sb.String()
         }
     %}

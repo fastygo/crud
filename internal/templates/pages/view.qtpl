@@ -7,22 +7,29 @@
     type ViewData = models.ViewData
 %}
 
-// ViewPage renders a single content item view page.
 {% func ViewPage(data *ViewData) %}
     {% code
         pageContent := func() string {
             var sb strings.Builder
-            sb.WriteString(`<article class="prose lg:prose-xl mx-auto bg-white p-6 rounded shadow">
+            sb.WriteString(`<article class="prose dark:prose-invert prose-indigo lg:prose-lg mx-auto bg-white dark:bg-gray-800 p-6 md:p-8 rounded-lg shadow-md">
                 <h1>`)
             sb.WriteString(data.Item.Title)
             sb.WriteString(`</h1>
-                <p class="text-sm text-gray-500">Status: `)
+                <p class="text-sm text-gray-500 dark:text-gray-400">Status: `)
+            // Add badge styling for status
+            statusClass := "bg-gray-100 text-gray-800 dark:bg-gray-600 dark:text-gray-200"
+            if data.Item.Status == "published" {
+                statusClass = "bg-green-100 text-green-800 dark:bg-green-700 dark:text-green-100"
+            }
+            sb.WriteString(`<span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset ring-gray-500/10 dark:ring-gray-400/20 `)
+            sb.WriteString(statusClass)
+            sb.WriteString(`">`)
             sb.WriteString(data.Item.Status)
-            sb.WriteString(`, Last Updated: `)
+            sb.WriteString(`</span>, Last Updated: `)
             sb.WriteString(data.Item.UpdatedAt.Format("January 2, 2006"))
             sb.WriteString(`</p>
                 
-                <div>
+                <div class="mt-6">
                     <!-- WARNING: Assuming data.Item.Content is safe HTML. Sanitize if necessary! -->
                     `)
             // Use WriteString to append the potentially unsafe HTML content
@@ -30,11 +37,11 @@
             sb.WriteString(`
                 </div>
                 
-                <div class="mt-8 border-t pt-4">
+                <div class="mt-8 border-t border-gray-200 dark:border-gray-700 pt-6 flex items-center space-x-4">
                     <a href="/content/`)
             sb.WriteString(data.Item.ID)
-            sb.WriteString(`/edit" class="text-indigo-600 hover:text-indigo-900 mr-4">Edit this item</a>
-                    <a href="/content" class="text-gray-600 hover:text-gray-900">Back to list</a>
+            sb.WriteString(`/edit" class="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300">Edit this item</a>
+                    <a href="/content" class="text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200">Back to list</a>
                 </div>
             </article>`)
             return sb.String()

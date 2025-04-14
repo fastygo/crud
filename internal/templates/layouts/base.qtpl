@@ -5,11 +5,12 @@
     // PageData is the interface required by the BaseLayout function.
     type PageData = models.PageData
 %}
-
-<!-- BaseLayout defines the main HTML structure. -->
 {% func BaseLayout(data PageData, pageContent func() string) %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" 
+      x-data="{ theme: localStorage.getItem('theme') || 'light' }" 
+      x-init="$watch('theme', val => localStorage.setItem('theme', val)); document.documentElement.setAttribute('data-theme', theme)" 
+      :data-theme="theme">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -22,12 +23,15 @@
         /* Basic style to prevent flash of unstyled content with Alpine.js */
         [x-cloak] { display: none !important; }
     </style>
+    <style type="text/tailwindcss">
+      @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+    </style>
 </head>
-<body class="bg-gray-100 flex flex-col min-h-screen">
+<body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex flex-col min-h-screen antialiased">
     <!-- Render the header component -->
     {%s= components.Header() %}
 
-    <main class="container mx-auto px-4 py-8 mt-16 flex-grow">
+    <main class="container mx-auto px-4 sm:px-6 lg:px-8 py-8 mt-16 flex-grow">
         <!-- Render the page-specific content passed as a function -->
         {%s= pageContent() %}
     </main>
