@@ -1,0 +1,44 @@
+{% import "cms/internal/models" %}
+{% import "cms/internal/templates/layouts" %}
+{% import "strings" %}
+
+{% code
+    // ViewData struct is defined in models package
+    type ViewData = models.ViewData
+%}
+
+// ViewPage renders a single content item view page.
+{% func ViewPage(data *ViewData) %}
+    {% code
+        pageContent := func() string {
+            var sb strings.Builder
+            sb.WriteString(`<article class="prose lg:prose-xl mx-auto bg-white p-6 rounded shadow">
+                <h1>`)
+            sb.WriteString(data.Item.Title)
+            sb.WriteString(`</h1>
+                <p class="text-sm text-gray-500">Status: `)
+            sb.WriteString(data.Item.Status)
+            sb.WriteString(`, Last Updated: `)
+            sb.WriteString(data.Item.UpdatedAt.Format("January 2, 2006"))
+            sb.WriteString(`</p>
+                
+                <div>
+                    <!-- WARNING: Assuming data.Item.Content is safe HTML. Sanitize if necessary! -->
+                    `)
+            // Use WriteString to append the potentially unsafe HTML content
+            sb.WriteString(data.Item.Content)
+            sb.WriteString(`
+                </div>
+                
+                <div class="mt-8 border-t pt-4">
+                    <a href="/content/`)
+            sb.WriteString(data.Item.ID)
+            sb.WriteString(`/edit" class="text-indigo-600 hover:text-indigo-900 mr-4">Edit this item</a>
+                    <a href="/content" class="text-gray-600 hover:text-gray-900">Back to list</a>
+                </div>
+            </article>`)
+            return sb.String()
+        }
+    %}
+    {%s= layouts.BaseLayout(data, pageContent) %}
+{% endfunc %} 

@@ -1,0 +1,20 @@
+{% import "cms/internal/models" %}
+
+{% code
+    // NewData struct is defined in models package
+    type NewData = models.NewData
+%}
+
+// CreatePage renders the content creation form by reusing the EditPage logic.
+{% func CreatePage(data *NewData) %}
+    {% code
+        // Adapt NewData to EditData for the EditPage template
+        editData := &models.EditData{
+            BasePageData: data.BasePageData, // Pass common data
+            Item: models.Content{}, // Empty content item for a new form
+            IsNew: true,
+        }
+    %}
+    <!-- Render the EditPage template with adapted data -->
+    {%s= EditPage(editData) %}
+{% endfunc %} 
