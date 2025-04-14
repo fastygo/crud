@@ -1,0 +1,22 @@
+# Git specific files
+.git/
+.gitignore
+
+# Docker specific files
+.dockerignore
+Dockerfile
+
+# Go build artifacts (if built locally)
+cms
+*.exe
+
+# Local configuration and documentation
+config.json.example # If you add an example config
+README.md
+.manual/
+.examples/
+tmp/
+
+# IDE specific folders
+.vscode/
+.idea/ 
