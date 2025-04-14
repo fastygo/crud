@@ -322,10 +322,8 @@ func (h *CRUDHandler) ImportJSON(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	// Send success response
-	ctx.SetContentType("application/json; charset=utf-8")
-	ctx.SetStatusCode(fasthttp.StatusOK)
-	fmt.Fprint(ctx, `{"message":"Import successful"}`)
+	// Redirect to the content list page upon successful import
+	ctx.Redirect("/content?imported=true", fasthttp.StatusSeeOther) // Use 303 See Other
 }
 
 // Helper to get the buffer pool from context if needed, although not used in this version.
