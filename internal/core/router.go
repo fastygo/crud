@@ -1,6 +1,8 @@
 package core
 
 import (
+	"strings"
+
 	"github.com/fasthttp/router"
 	"github.com/valyala/bytebufferpool"
 	"github.com/valyala/fasthttp"
@@ -17,6 +19,13 @@ type Router struct {
 func NewRouter() *Router {
 	r := router.New()
 	defaultNotFound := r.NotFound
+
+	// Configure the router for better performance
+	r.RedirectTrailingSlash = false  // Avoid redirects for trailing slashes
+	r.RedirectFixedPath = false      // Avoid path auto-fixing redirects
+	r.HandleMethodNotAllowed = false // Skip method not allowed checks for speed
+	r.HandleOPTIONS = false          // Skip automatic OPTIONS handling
+
 	return &Router{
 		router:   r,
 		pool:     &bytebufferpool.Pool{},
@@ -27,13 +36,24 @@ func NewRouter() *Router {
 // wrapHandler enhances a fasthttp.RequestHandler to use a pooled buffer.
 func wrapHandler(h fasthttp.RequestHandler, pool *bytebufferpool.Pool) fasthttp.RequestHandler {
 	return func(ctx *fasthttp.RequestCtx) {
-		buf := pool.Get()
-		defer pool.Put(buf)
-
-		// Store the buffer in the UserValue for handlers to potentially use
-		ctx.SetUserValue("buffer", buf)
+		// Only get a buffer if the handler is likely to need it
+		// (content handlers, not static files)
+		if needsBuffer(ctx) {
+			buf := pool.Get()
+			defer pool.Put(buf)
+			ctx.SetUserValue("buffer", buf)
+		}
 		h(ctx)
 	}
+}
+
+// Helper to determine if a request needs a buffer
+func needsBuffer(ctx *fasthttp.RequestCtx) bool {
+	// Only allocate buffers for API and content creation/editing paths
+	path := string(ctx.Path())
+	return strings.HasPrefix(path, "/api/") ||
+		strings.Contains(path, "/edit") ||
+		strings.Contains(path, "/new")
 }
 
 // GET registers a GET handler.

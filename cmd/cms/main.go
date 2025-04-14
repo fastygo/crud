@@ -7,8 +7,12 @@ import (
 	"cms/internal/storage"
 
 	"embed"
+	"fmt"
 	"log"
+	"os"
 	"runtime/debug"
+	"sync"
+	"time"
 
 	"github.com/valyala/fasthttp"
 )
@@ -19,10 +23,17 @@ import (
 var assets embed.FS
 
 func main() {
-	// Optimize GC
-	debug.SetGCPercent(100)
-	// Consider making this configurable or based on available memory
-	// debug.SetMemoryLimit(512 * 1024 * 1024) // 512MB
+	// Set a stricter GC percent (less memory usage, more frequent GC)
+	debug.SetGCPercent(20) // Change from 100 to 20
+
+	// Set memory limit more aggressively
+	if os.Getenv("LOW_MEMORY") == "true" {
+		// For low memory environments (512MB total server RAM)
+		debug.SetMemoryLimit(256 * 1024 * 1024) // 256MB
+	} else {
+		// For standard environments
+		debug.SetMemoryLimit(512 * 1024 * 1024) // 512MB
+	}
 
 	// Initialize configuration
 	cfg := config.Load()
@@ -65,20 +76,74 @@ func main() {
 	router.POST("/api/export", crudHandler.ExportJSON)
 	router.POST("/api/import", crudHandler.ImportJSON)
 
+	// Start time tracking
+	startTime := time.Now()
+	requestCount := 0
+	var requestLock sync.Mutex
+
+	// Create a simple middleware to track request timing
+	trackTiming := func(next fasthttp.RequestHandler) fasthttp.RequestHandler {
+		return func(ctx *fasthttp.RequestCtx) {
+			start := time.Now()
+			next(ctx)
+			duration := time.Since(start)
+
+			// Log if request takes longer than threshold
+			if duration > 20*time.Millisecond {
+				log.Printf("Slow request: %s %s - %v",
+					string(ctx.Method()), string(ctx.Path()), duration)
+			}
+
+			requestLock.Lock()
+			requestCount++
+			requestLock.Unlock()
+
+			// Add response time header (helps with debugging)
+			ctx.Response.Header.Set("X-Response-Time",
+				fmt.Sprintf("%d ms", duration.Milliseconds()))
+		}
+	}
+
+	// Wrap the main router handler with the timing middleware
+	serverHandler := trackTiming(router.Handler)
+
 	// Start the server
 	server := &fasthttp.Server{
-		Handler: router.Handler,
+		Handler: serverHandler,
 		Name:    "cms",
 		// Fasthttp optimizations
 		Concurrency:        cfg.Concurrency,
-		ReadBufferSize:     4096, // Consider making configurable
-		WriteBufferSize:    4096, // Consider making configurable
+		ReadBufferSize:     8192, // Increased from 4096
+		WriteBufferSize:    8192, // Increased from 4096
 		ReadTimeout:        cfg.ReadTimeout,
 		WriteTimeout:       cfg.WriteTimeout,
-		MaxRequestBodySize: 10 * 1024 * 1024, // 10MB - Consider making configurable
+		MaxRequestBodySize: 10 * 1024 * 1024, // 10MB
+		DisableKeepalive:   false,            // Enable keep-alive for connection reuse
+		MaxConnsPerIP:      100,              // Limit connections per IP to prevent abuse
+		TCPKeepalive:       true,             // Enable TCP keepalive
+		TCPKeepalivePeriod: 60 * time.Second, // Keep connections alive for 60 seconds
+		ReduceMemoryUsage:  true,             // Enable memory usage optimization
 	}
 
 	log.Printf("Server starting on %s", cfg.Address)
+
+	// Log performance stats every minute
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			requestLock.Lock()
+			count := requestCount
+			requestCount = 0
+			requestLock.Unlock()
+
+			uptime := time.Since(startTime)
+			log.Printf("Performance: %d requests in the last minute. Uptime: %v",
+				count, uptime.Round(time.Second))
+		}
+	}()
+
 	if err := server.ListenAndServe(cfg.Address); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}

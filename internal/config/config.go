@@ -22,11 +22,16 @@ func Load() *Config {
 	// Default values
 	cfg := &Config{
 		Address:      ":8080",
-		Concurrency:  256 * 1024, // Default from fasthttp
+		Concurrency:  1024 * 16, // Reduced from 256k to more reasonable value
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		// GCPercent:   100,
 		// MaxHeapSize: 512 * 1024 * 1024, // 512MB
+	}
+
+	// Check for PORT environment variable (common in cloud environments)
+	if port := os.Getenv("PORT"); port != "" {
+		cfg.Address = ":" + port
 	}
 
 	// Load from file if it exists
