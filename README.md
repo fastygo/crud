@@ -65,37 +65,95 @@ This project is an ideal learning resource and starting point for **junior Go de
 
 ### Prerequisites
 
-*   Go (version 1.21 or later recommended)
+*   Go (version 1.23 or later recommended)
 *   `quicktemplate` compiler (`qtc`)
 
-   ```bash
-   go install github.com/valyala/quicktemplate/qtc@latest
-   ```
+    ```bash
+    go install github.com/valyala/quicktemplate/qtc@latest
+    ```
 
-### Running the Application
+### Running the Application Locally
 
 1.  **Clone the repository:**
     ```bash
-    git clone <repository_url>
-    cd <repository_directory>
+    git clone https://github.com/fastygo/cms.git
+    cd cms
     ```
 2.  **Generate Go code from templates:**
     ```bash
-    qtc -dir=internal/templates
+    go generate ./...
+    # or use: qtc -dir=internal/templates 
     ```
-3.  **Build the application:**
+3.  **(Optional) Set Authentication Variables:** The application now uses basic authentication.
+    Set the following environment variables before running:
     ```bash
-    go build -o cms ./cmd/cms
+    # Example for Linux/macOS/Git Bash
+    export AUTH_USER="your_desired_username"
+    export AUTH_PASS="your_strong_password"
+    export LOGIN_LIMIT_ATTEMPT="5" # Optional: Default is 5
+    export LOGIN_LOCK_DURATION="1h" # Optional: Default is 1h
+
+    # Example for Windows Command Prompt
+    # set AUTH_USER=your_desired_username
+    # set AUTH_PASS=your_strong_password
+    # set LOGIN_LIMIT_ATTEMPT=5
+    # set LOGIN_LOCK_DURATION=1h
+
+    # Example for PowerShell
+    # $env:AUTH_USER="your_desired_username"
+    # $env:AUTH_PASS="your_strong_password"
+    # $env:LOGIN_LIMIT_ATTEMPT="5"
+    # $env:LOGIN_LOCK_DURATION="1h"
     ```
-    *(Alternatively, run directly)*
+    If these variables are not set, the application will log a warning, and authentication will effectively be disabled (or fail depending on usage).
+
+4.  **Run the application directly:**
     ```bash
-    go run ./cmd/cms/main.go
+    # Set variables directly for the run command (Linux/macOS/Git Bash)
+    AUTH_USER="admin" AUTH_PASS="qwerty123" LOGIN_LIMIT_ATTEMPT="3" LOGIN_LOCK_DURATION="1m" go run cmd/cms/main.go
+
+    # Or, if variables were exported previously:
+    # go run cmd/cms/main.go
     ```
-4.  **Run the executable:**
-    ```bash
-    ./cms
-    ```
+    *(Alternatively, build first: `go build -o cms ./cmd/cms` then run `./cms`)*
+
 5.  **Access the application:** Open your web browser to `http://localhost:8080`
+6.  **Login:** You will be prompted to log in. Use the credentials you set in the environment variables.
+
+7.  **DEMO Admin:** Open to `https://crud.fastygo.app-server.ru/` and use **Login:** `admin` **Pass:** `qwerty123`. You're great
+
+### Running with Docker
+
+1.  **Build the Docker image:**
+    ```bash
+    docker build -t fasty-cms .
+    ```
+2.  **Run the Docker container:**
+    ```bash
+    docker run -p 8080:8080 --rm --name fasty-cms-app fasty-cms
+    ```
+    *   You can override the default credentials and settings using `-e` flags:
+        ```bash
+        docker run -p 8080:8080 --rm --name fasty-cms-app \
+          -e AUTH_USER="new_admin" \
+          -e AUTH_PASS="a_very_secure_password" \
+          -e LOGIN_LIMIT_ATTEMPT="10" \
+          -e LOGIN_LOCK_DURATION="30m" \
+          fasty-cms
+        ```
+
+3.  **Access the application:** Open your web browser to `http://localhost:8080`
+4.  **Login (Default Docker):** If you ran the container without overriding variables, use the default credentials set in the `Dockerfile`:
+    *   **Username:** `admin`
+    *   **Password:** `qwerty123`
+
+## Authentication
+
+The application implements basic authentication using credentials stored in environment variables (`AUTH_USER`, `AUTH_PASS`). Access to most pages and the API requires the user to be logged in.
+
+It also includes rate limiting for login attempts (`LOGIN_LIMIT_ATTEMPT`, default 5) with a temporary lockout period (`LOGIN_LOCK_DURATION`, default 1 hour) after exceeding the limit.
+
+**Security Note:** This basic authentication is suitable for development or trusted environments. For production, consider implementing more robust security measures like password hashing, HTTPS enforcement, and potentially JWT or OAuth.
 
 ## Future Improvements
 

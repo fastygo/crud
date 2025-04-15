@@ -38,6 +38,13 @@ COPY --from=builder --chown=appuser:appgroup /app/cms /app/cms
 # Switch to non-root user
 USER appuser
 
+# Set default environment variables for authentication and login limits
+# These can be overridden at runtime (e.g., docker run -e AUTH_USER=new_user ...)
+ENV AUTH_USER="admin"
+ENV AUTH_PASS="qwerty123"
+ENV LOGIN_LIMIT_ATTEMPT="3"
+ENV LOGIN_LOCK_DURATION="1m"
+
 # Assets are embedded in the binary, no need to copy them.
 
 # Expose the default port 8080. Coolify might override or map this automatically.

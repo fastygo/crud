@@ -13,8 +13,13 @@
 <!DOCTYPE html>
 <html lang="en"
       x-data="{ theme: localStorage.getItem('theme') || 'light' }"
-      x-init="$watch('theme', val => localStorage.setItem('theme', val)); document.documentElement.setAttribute('data-theme', theme)"
-      :data-theme="theme">
+      x-init="$watch('theme', val => localStorage.setItem('theme', val));
+              if (theme === 'dark') {
+                  document.documentElement.classList.add('dark');
+              } else {
+                  document.documentElement.classList.remove('dark');
+              }"
+      :class="{ 'dark': theme === 'dark' }" >
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -27,8 +32,9 @@
         /* Basic style to prevent flash of unstyled content with Alpine.js */
         [x-cloak] { display: none !important; }
     </style>
-     <style type="text/tailwindcss">
-      @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+    <style type="text/tailwindcss">
+      /* Define dark mode based on the .dark class on html */
+      @custom-variant dark (&:where(.dark, .dark *));
     </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 flex items-center justify-center min-h-screen antialiased">

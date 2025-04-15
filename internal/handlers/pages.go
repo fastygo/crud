@@ -257,17 +257,15 @@ func (h *PageHandler) PostLogin(ctx *fasthttp.RequestCtx) {
 	if attempts >= h.cfg.LoginLimitAttempt && !lastAttemptTime.IsZero() {
 		lockoutExpiry := lastAttemptTime.Add(h.cfg.LoginLockDuration)
 		if time.Now().Before(lockoutExpiry) {
+			// LOCKOUT ACTIVE
 			remaining := time.Until(lockoutExpiry).Round(time.Second)
-			lockoutMsg := fmt.Sprintf("Too many failed login attempts. Please try again in %v.", remaining)
+			log.Printf("PostLogin: Account locked for user '%s'. Redirecting to home. Time remaining: %v", username, remaining)
 
-			log.Printf("PostLogin: Account locked for user '%s'. Time remaining: %v", username, remaining)
-			// Set lockout message in session for the GET /login handler
-			store.Set("login_lockout_message", lockoutMsg)
-			store.Delete("login_error") // Clear normal error
-			if saveErr := h.sess.Save(ctx, store); saveErr != nil {
-				log.Printf("PostLogin Lockout: Error saving session: %v", saveErr)
-			}
-			ctx.Redirect("/login", fasthttp.StatusSeeOther)
+			// Instead of showing message, redirect away immediately if already locked
+			ctx.Redirect("/", fasthttp.StatusSeeOther) // Redirect to home page
+			// Optionally, set a flash message for the home page if needed
+			// store.Set("flash_message", "Login attempt blocked due to too many failed attempts.")
+			// h.sess.Save(ctx, store) // Need to save if setting flash message
 			return
 		} else {
 			// Lockout expired, reset attempts before checking credentials

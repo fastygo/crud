@@ -21,7 +21,7 @@
             sb.WriteString(`<div>`)
             sb.WriteString(`<label for="username" class="block text-sm font-medium leading-6 text-gray-900 dark:text-white">Username</label>`)
             sb.WriteString(`<div class="mt-2">`)
-            sb.WriteString(`<input id="username" name="username" type="text" autocomplete="username" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-indigo-500">`)
+            sb.WriteString(`<input id="username" name="username" type="text" autocomplete="username" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-indigo-500 dark:placeholder:text-gray-400">`)
             sb.WriteString(`</div>`)
             sb.WriteString(`</div>`)
 
@@ -31,13 +31,13 @@
             sb.WriteString(`<label for="password" class="block text-sm font-medium leading-6 text-gray-900 dark:text-white">Password</label>`)
             sb.WriteString(`</div>`)
             sb.WriteString(`<div class="mt-2">`)
-            sb.WriteString(`<input id="password" name="password" type="password" autocomplete="current-password" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-indigo-500">`)
+            sb.WriteString(`<input id="password" name="password" type="password" autocomplete="current-password" required class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 dark:bg-gray-700 dark:text-white dark:ring-gray-600 dark:focus:ring-indigo-500 dark:placeholder:text-gray-400">`)
             sb.WriteString(`</div>`)
             sb.WriteString(`</div>`)
 
             // Lockout message block (Yellow)
             if data.LockoutMessage != "" {
-                sb.WriteString(`<div class="rounded-md bg-yellow-50 p-4 dark:bg-yellow-900/20">`)
+                sb.WriteString(`<div class="rounded-md bg-yellow-50 p-4 dark:bg-yellow-800/30 dark:border dark:border-yellow-600/50">`)
                 sb.WriteString(`<div class="flex">`)
                 sb.WriteString(`<div class="flex-shrink-0">`)
                 // Warning Icon
@@ -54,7 +54,7 @@
 
             // Error message block (Red - only show if no lockout message)
             if data.ErrorMessage != "" && data.LockoutMessage == "" {
-                sb.WriteString(`<div class="rounded-md bg-red-50 p-4 dark:bg-red-900/20">`)
+                sb.WriteString(`<div class="rounded-md bg-red-50 p-4 dark:bg-red-800/30 dark:border dark:border-red-600/50">`)
                 sb.WriteString(`<div class="flex">`)
                 sb.WriteString(`<div class="flex-shrink-0">`)
                 // Error Icon
