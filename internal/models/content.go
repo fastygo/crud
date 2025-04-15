@@ -21,13 +21,15 @@ type Content struct {
 type PageData interface {
 	Title() string
 	Description() string
-	// Add other common fields if needed, e.g., CanonicalURL()
+	IsAuthenticated() bool // Added method to check authentication status
+	// Add other common fields if needed, e.g., CanonicalURL(), Username()
 }
 
 // BasePageData provides a basic implementation of PageData.
 type BasePageData struct {
 	PageTitle       string
 	PageDescription string
+	AuthStatus      bool // Field to store authentication status
 }
 
 func (d *BasePageData) Title() string {
@@ -36,6 +38,10 @@ func (d *BasePageData) Title() string {
 
 func (d *BasePageData) Description() string {
 	return d.PageDescription
+}
+
+func (d *BasePageData) IsAuthenticated() bool {
+	return d.AuthStatus
 }
 
 // IndexData holds data specifically for the index page template.

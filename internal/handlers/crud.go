@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"cms/internal/config"
 	"cms/internal/storage"
 
+	session "github.com/fasthttp/session/v2"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fastjson"
 )
@@ -20,13 +22,17 @@ import (
 // CRUDHandler handles API requests for content management.
 type CRUDHandler struct {
 	db         *storage.EphemeralBoltDB
+	sess       *session.Session
+	cfg        *config.Config
 	parserPool fastjson.ParserPool // Use a pool for fastjson parsers
 }
 
 // NewCRUDHandler creates a new CRUD handler.
-func NewCRUDHandler(db *storage.EphemeralBoltDB) *CRUDHandler {
+func NewCRUDHandler(db *storage.EphemeralBoltDB, sess *session.Session, cfg *config.Config) *CRUDHandler {
 	return &CRUDHandler{
-		db: db,
+		db:   db,
+		sess: sess,
+		cfg:  cfg,
 		// parserPool is implicitly initialized
 	}
 }

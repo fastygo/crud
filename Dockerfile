@@ -24,14 +24,19 @@ RUN go install github.com/valyala/quicktemplate/qtc@latest && qtc -dir=./interna
 # CGO_ENABLED=0 is crucial for building a static binary for Alpine
 RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /app/cms ./cmd/cms/main.go
 
-# Stage 2: Create the final lightweight runtime image
+# Stage 2: Create the final runtime image
 FROM alpine:latest
 
-# Set the working directory
+# Create a non-root user and group
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 WORKDIR /app
 
-# Copy only the compiled binary from the builder stage
-COPY --from=builder /app/cms /app/cms
+# Copy binary and ensure correct ownership
+COPY --from=builder --chown=appuser:appgroup /app/cms /app/cms
+
+# Switch to non-root user
+USER appuser
 
 # Assets are embedded in the binary, no need to copy them.
 
