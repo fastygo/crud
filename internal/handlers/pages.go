@@ -9,7 +9,6 @@ import (
 
 	"cms/internal/config"
 	"cms/internal/models"
-	"cms/internal/storage"
 
 	// Import the specific generated template packages
 	"cms/internal/templates/pages"
@@ -22,23 +21,94 @@ import (
 
 // PageHandler handles requests for HTML pages.
 type PageHandler struct {
-	db   *storage.EphemeralBoltDB
-	sess *session.Session
-	cfg  *config.Config
+	sess           *session.Session
+	cfg            *config.Config
+	initialContent map[string]models.Content // Added initial content map
 }
 
 // NewPageHandler creates a new page handler.
-func NewPageHandler(db *storage.EphemeralBoltDB, sess *session.Session, cfg *config.Config) *PageHandler {
+func NewPageHandler(sess *session.Session, cfg *config.Config, initialContent map[string]models.Content) *PageHandler {
 	return &PageHandler{
-		db:   db,
-		sess: sess,
-		cfg:  cfg,
+		sess:           sess,
+		cfg:            cfg,
+		initialContent: initialContent,
 	}
 }
 
+// Helper function to get user's content map from session or initialize it
+func (h *PageHandler) getUserContent(ctx *fasthttp.RequestCtx) (map[string]models.Content, error) {
+	store, err := h.sess.Get(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+
+	contentData := store.Get("user_content")
+	if contentData == nil {
+		// Not initialized, clone initial data and serialize to JSON
+		log.Println("getUserContent (Page): Initializing user content in session")
+		userContent := make(map[string]models.Content, len(h.initialContent))
+		for k, v := range h.initialContent {
+			userContent[k] = v // Shallow copy
+		}
+		// Serialize content to JSON bytes for storage
+		jsonBytes, err := json.Marshal(userContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal content for session: %w", err)
+		}
+		// Store the JSON rather than direct object
+		store.Set("user_content", jsonBytes)
+		if err := h.sess.Save(ctx, store); err != nil {
+			return nil, fmt.Errorf("failed to save session after initializing content: %w", err)
+		}
+		return userContent, nil
+	}
+
+	// Now handle different types that might be in session
+	var userContent map[string]models.Content
+
+	switch v := contentData.(type) {
+	case []byte:
+		// This is our expected format - JSON bytes
+		if err := json.Unmarshal(v, &userContent); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal content bytes from session: %w", err)
+		}
+	case string:
+		// Handle if somehow stored as string
+		if err := json.Unmarshal([]byte(v), &userContent); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal content string from session: %w", err)
+		}
+	case map[string]interface{}:
+		// Handle case where session serialization might change types
+		log.Println("getUserContent (Page): Attempting conversion from map[string]interface{}")
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("page: failed to marshal map[string]interface{}: %w", err)
+		}
+		if err := json.Unmarshal(b, &userContent); err != nil {
+			return nil, fmt.Errorf("page: failed to unmarshal into map[string]models.Content: %w", err)
+		}
+		// Update session with bytes to prevent future type conversions
+		jsonBytes, err := json.Marshal(userContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal content for session update: %w", err)
+		}
+		store.Set("user_content", jsonBytes)
+		if err := h.sess.Save(ctx, store); err != nil {
+			log.Printf("Warning: failed to update session after type conversion: %v", err)
+			// Non-fatal
+		}
+	default:
+		return nil, fmt.Errorf("page: unexpected type for user_content: %T", contentData)
+	}
+
+	return userContent, nil
+}
+
 // Helper function to populate BasePageData, including auth status
+// Now uses getUserContent to potentially initialize session data if needed
 func (h *PageHandler) newBasePageData(ctx *fasthttp.RequestCtx, title, description string) models.BasePageData {
 	authStatus := false
+	// We still need the session store for the auth flag
 	store, err := h.sess.Get(ctx)
 	if err == nil {
 		if authVal := store.Get("authenticated"); authVal != nil {
@@ -46,8 +116,9 @@ func (h *PageHandler) newBasePageData(ctx *fasthttp.RequestCtx, title, descripti
 				authStatus = authenticated
 			}
 		}
+		// Trigger user content initialization if not already done (harmless if already done)
+		_, _ = h.getUserContent(ctx) // Ignore errors here, focus is on BasePageData
 	} else {
-		// Log error getting session, but proceed assuming not authenticated
 		log.Printf("newBasePageData: Error getting session for %s: %v", string(ctx.Path()), err)
 	}
 
@@ -59,32 +130,48 @@ func (h *PageHandler) newBasePageData(ctx *fasthttp.RequestCtx, title, descripti
 }
 
 // Index handles GET / - renders the home page.
+// Requires a corresponding template function: pages.WriteIndexPage
 func (h *PageHandler) Index(ctx *fasthttp.RequestCtx) {
-	data := &models.IndexData{
-		BasePageData: h.newBasePageData(ctx, "CMS Home", "Modern, lightweight content management system"),
-	}
+	// For the index page, we typically just need the base data for layout (e.g., auth status)
+	// Content itself isn't usually displayed directly on a generic index page.
+	// If specific content *is* needed for the index, logic to fetch/prepare it would go here.
+	baseData := h.newBasePageData(ctx, "Home", "Welcome to the CMS")
 	ctx.SetContentType("text/html; charset=utf-8")
-	pages.WriteIndexPage(ctx, data)
+	// Assuming you have an IndexPage template similar to others
+	// pages.WriteIndexPage(ctx, &data) // Use WriteIndexPage
+	// Create the correct data type
+	data := &models.IndexData{
+		BasePageData: baseData,
+		// Initialize any other IndexData specific fields if they were added
+	}
+	pages.WriteIndexPage(ctx, data) // Pass the pointer to models.IndexData
 }
 
-// List handles GET /content - renders the list of content items.
+// List handles GET /content - renders the list of content items from session.
 func (h *PageHandler) List(ctx *fasthttp.RequestCtx) {
-	contents, err := h.db.ListContent()
+	userContent, err := h.getUserContent(ctx)
 	if err != nil {
-		log.Printf("Error listing content for page: %v", err)
+		log.Printf("Page List: Error getting user content: %v", err)
 		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		return
 	}
 
+	// Convert map to slice for template
+	contents := make([]models.Content, 0, len(userContent))
+	for _, item := range userContent {
+		contents = append(contents, item)
+	}
+	// TODO: Add sorting
+
 	data := &models.ListData{
-		BasePageData: h.newBasePageData(ctx, "Content List", "All content items"),
+		BasePageData: h.newBasePageData(ctx, "Content List", "Your current content items"),
 		Items:        contents,
 	}
 	ctx.SetContentType("text/html; charset=utf-8")
 	pages.WriteListPage(ctx, data)
 }
 
-// View handles GET /content/{id} - renders a single content item.
+// View handles GET /content/{id} - renders a single content item from session.
 func (h *PageHandler) View(ctx *fasthttp.RequestCtx) {
 	id, ok := ctx.UserValue("id").(string)
 	if !ok || id == "" {
@@ -92,28 +179,27 @@ func (h *PageHandler) View(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	contentData, err := h.db.GetContent(id)
+	userContent, err := h.getUserContent(ctx)
 	if err != nil {
-		log.Printf("Error getting content %s for view: %v", id, err)
+		log.Printf("Page View: Error getting user content for id %s: %v", id, err)
 		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		return
 	}
 
-	if contentData == nil {
-		ctx.Error("Content not found", fasthttp.StatusNotFound)
+	item, found := userContent[id]
+	if !found {
+		// Redirect to list or show 404? Redirecting to list for now.
+		log.Printf("Page View: Item %s not found in user session", id)
+		ctx.Redirect("/content?notfound="+id, fasthttp.StatusSeeOther)
 		return
-	}
-
-	var content models.Content
-	if err := json.Unmarshal(contentData, &content); err != nil {
-		log.Printf("Error unmarshaling content %s for view: %v", id, err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
+		// Or: Use NotFound handler
+		// h.NotFound(ctx)
+		// return
 	}
 
 	data := &models.ViewData{
-		BasePageData: h.newBasePageData(ctx, content.Title, "View content item"), // TODO: Use excerpt
-		Item:         content,
+		BasePageData: h.newBasePageData(ctx, item.Title, "View content item"),
+		Item:         item,
 	}
 	ctx.SetContentType("text/html; charset=utf-8")
 	pages.WriteViewPage(ctx, data)
@@ -121,14 +207,23 @@ func (h *PageHandler) View(ctx *fasthttp.RequestCtx) {
 
 // New handles GET /content/new - renders the form to create new content.
 func (h *PageHandler) New(ctx *fasthttp.RequestCtx) {
-	data := &models.NewData{
-		BasePageData: h.newBasePageData(ctx, "Create New Content", "Create a new content item"),
+	// Create an empty content item for the form
+	newItem := models.Content{
+		// Initialize any default fields if necessary
+		// ID will be generated on save (POST)
+	}
+
+	// Use the Edit page template, but mark it as 'new'
+	data := &models.EditData{
+		BasePageData: h.newBasePageData(ctx, "Create New Content", "Fill in the details for the new content item"),
+		Item:         newItem, // Pass the empty item
+		IsNew:        true,    // Indicate this is for creating a new item
 	}
 	ctx.SetContentType("text/html; charset=utf-8")
-	pages.WriteCreatePage(ctx, data)
+	pages.WriteEditPage(ctx, data) // Reuse the Edit page template
 }
 
-// Edit handles GET /content/{id}/edit - renders the form to edit content.
+// Edit handles GET /content/{id}/edit - renders the form to edit content from session.
 func (h *PageHandler) Edit(ctx *fasthttp.RequestCtx) {
 	id, ok := ctx.UserValue("id").(string)
 	if !ok || id == "" {
@@ -136,28 +231,23 @@ func (h *PageHandler) Edit(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	contentData, err := h.db.GetContent(id)
+	userContent, err := h.getUserContent(ctx)
 	if err != nil {
-		log.Printf("Error getting content %s for edit: %v", id, err)
+		log.Printf("Page Edit: Error getting user content for id %s: %v", id, err)
 		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		return
 	}
 
-	if contentData == nil {
-		ctx.Error("Content not found", fasthttp.StatusNotFound)
-		return
-	}
-
-	var content models.Content
-	if err := json.Unmarshal(contentData, &content); err != nil {
-		log.Printf("Error unmarshaling content %s for edit: %v", id, err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+	item, found := userContent[id]
+	if !found {
+		log.Printf("Page Edit: Item %s not found in user session", id)
+		ctx.Redirect("/content?notfound="+id, fasthttp.StatusSeeOther)
 		return
 	}
 
 	data := &models.EditData{
-		BasePageData: h.newBasePageData(ctx, "Edit: "+content.Title, "Edit content item"),
-		Item:         content,
+		BasePageData: h.newBasePageData(ctx, "Edit: "+item.Title, "Edit content item"),
+		Item:         item,
 		IsNew:        false,
 	}
 	ctx.SetContentType("text/html; charset=utf-8")
@@ -165,6 +255,8 @@ func (h *PageHandler) Edit(ctx *fasthttp.RequestCtx) {
 }
 
 // Login handles GET /login - renders the login form.
+// Logic for initializing user_content happens in getUserContent, called by newBasePageData.
+// Existing Login handler is mostly fine, might tweak message clearing slightly.
 func (h *PageHandler) Login(ctx *fasthttp.RequestCtx) {
 	var store *session.Store
 	var err error
@@ -208,7 +300,8 @@ func (h *PageHandler) Login(ctx *fasthttp.RequestCtx) {
 	pages.WriteLoginPage(ctx, data)
 }
 
-// PostLogin handles POST /login - processes login attempt with rate limiting.
+// PostLogin handles POST /login - processes login attempt.
+// Need to ensure user_content is cleared/reset upon successful login.
 func (h *PageHandler) PostLogin(ctx *fasthttp.RequestCtx) {
 	username := string(ctx.FormValue("username"))
 	password := string(ctx.FormValue("password"))
@@ -282,36 +375,52 @@ func (h *PageHandler) PostLogin(ctx *fasthttp.RequestCtx) {
 		// --- Login Successful ---
 		log.Printf("PostLogin: Successful login for user '%s'", username)
 
-		// Clear login attempt tracking from session
-		store.Delete("login_attempts")
-		store.Delete("last_login_attempt_time")
-		store.Delete("login_error")
-		store.Delete("login_lockout_message")
+		// Get session store BEFORE regenerating
+		store, err := h.sess.Get(ctx)
+		if err != nil {
+			log.Printf("PostLogin Success: Error getting session before clearing: %v", err)
+			// Proceed, but might not clear old data if session was invalid
+		} else {
+			// Clear login attempt tracking & old user content
+			store.Delete("login_attempts")
+			store.Delete("last_login_attempt_time")
+			store.Delete("login_error")
+			store.Delete("login_lockout_message")
+			store.Delete("user_content") // <<--- IMPORTANT: Clear previous user content
+			// Save immediately after clearing and before regenerating
+			if errSave := h.sess.Save(ctx, store); errSave != nil {
+				log.Printf("PostLogin Success: Error saving session after clearing: %v", errSave)
+				// Non-fatal, try regenerating anyway
+			}
+		}
 
 		// Regenerate session ID for security
-		if err := h.sess.Regenerate(ctx); err != nil {
-			log.Printf("PostLogin Success: Error regenerating session: %v", err)
-			// Re-fetch the store after regeneration, as the old one might be invalid
-			newStore, getErr := h.sess.Get(ctx)
-			if getErr != nil {
-				log.Printf("PostLogin Success: Error getting new session after regenerate: %v", getErr)
-				ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-				return
-			}
-			store = newStore // Use the new store
-		} // else: Regeneration succeeded, store is still valid (points to the new session data)
+		if errRegen := h.sess.Regenerate(ctx); errRegen != nil {
+			log.Printf("PostLogin Success: Error regenerating session: %v", errRegen)
+			// Need to fetch the new store after failed regenerate?
+			// Let's assume we continue with the old store if regenerate fails,
+			// but log it. If Get fails below, it will be handled.
+		}
 
-		// Set authentication flag
+		// Get the store again (might be new one after successful regenerate)
+		store, err = h.sess.Get(ctx)
+		if err != nil {
+			log.Printf("PostLogin Success: Error getting session after regenerate/clear: %v", err)
+			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+			return
+		}
+
+		// Set authentication flag in the potentially new store
 		store.Set("authenticated", true)
 		store.Set("username", username) // Optional: store username
 
-		// Check for redirect URL
-		redirectURLVal := store.Get("redirect_url")
-		store.Delete("redirect_url") // Remove it after retrieving
+		// Check for redirect URL (already deleted from old store if possible)
+		redirectURLVal := store.Get("redirect_url") // Check in current store
+		store.Delete("redirect_url")
 
-		// Save the session
-		if err := h.sess.Save(ctx, store); err != nil {
-			log.Printf("PostLogin Success: Error saving session: %v", err)
+		// Save the session (contains auth flags, maybe cleared redirect_url)
+		if err = h.sess.Save(ctx, store); err != nil {
+			log.Printf("PostLogin Success: Error saving final session: %v", err)
 			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 			return
 		}
@@ -362,6 +471,7 @@ func (h *PageHandler) PostLogin(ctx *fasthttp.RequestCtx) {
 }
 
 // Logout handles GET /logout - logs the user out.
+// Session destruction handles clearing user_content automatically.
 func (h *PageHandler) Logout(ctx *fasthttp.RequestCtx) {
 	// We don't strictly need to get the store before destroying,
 	// but it can be useful for logging the username if stored.

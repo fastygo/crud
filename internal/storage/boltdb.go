@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,30 +18,29 @@ import (
 )
 
 const (
-	contentBucket  = "content"
-	settingsBucket = "settings"
-	usersBucket    = "users"
+	contentBucket = "content"
+	// settingsBucket = "settings" // Keep if settings are still needed from initial db
+	// usersBucket    = "users"    // Keep if user info is stored here
 )
 
-// EphemeralBoltDB manages a temporary BoltDB instance.
-type EphemeralBoltDB struct {
+// InitialDataReader provides read-only access to the initial database state.
+type InitialDataReader struct {
 	db         *bbolt.DB
-	tempDir    string
-	tempFile   string
+	tempDir    string // Keep track for cleanup
 	bufferPool *bytebufferpool.Pool
-	mu         sync.RWMutex
+	mu         sync.RWMutex // Keep RWMutex for potential concurrent reads
 }
 
-// NewEphemeralBoltDB creates a temporary BoltDB instance, copying initial data from embedded FS.
-func NewEphemeralBoltDB(fs embed.FS, initialDBPath string) (*EphemeralBoltDB, error) {
+// NewInitialDataReader creates a reader for the initial BoltDB data, copied from embedded FS.
+func NewInitialDataReader(fs embed.FS, initialDBPath string) (*InitialDataReader, error) {
 	// Create a temporary directory
-	tempDir, err := os.MkdirTemp("", "cms-db-*")
+	tempDir, err := os.MkdirTemp("", "cms-initial-db-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
 	// Path for the temporary DB file
-	tempFile := filepath.Join(tempDir, "data.db")
+	tempFile := filepath.Join(tempDir, "initial_data.db")
 
 	// Extract the initial database from the embedded FS
 	src, err := fs.Open(initialDBPath)
@@ -65,265 +65,122 @@ func NewEphemeralBoltDB(fs embed.FS, initialDBPath string) (*EphemeralBoltDB, er
 	}
 	dst.Close() // Close dst after successful copy
 
-	// Open the BoltDB file
-	db, err := bbolt.Open(tempFile, 0600, &bbolt.Options{
-		Timeout: 1 * time.Second, // Set a reasonable timeout
+	// Open the BoltDB file in read-only mode
+	db, err := bbolt.Open(tempFile, 0400, &bbolt.Options{
+		ReadOnly: true, // Open in read-only mode
+		Timeout:  1 * time.Second,
 	})
 	if err != nil {
 		os.RemoveAll(tempDir) // Clean up on error
 		return nil, fmt.Errorf("failed to open boltdb file %s: %w", tempFile, err)
 	}
 
-	// Ensure necessary buckets exist
-	err = db.Update(func(tx *bbolt.Tx) error {
-		buckets := []string{contentBucket, settingsBucket, usersBucket}
-		for _, bucket := range buckets {
-			_, err := tx.CreateBucketIfNotExists([]byte(bucket))
-			if err != nil {
-				return fmt.Errorf("failed to create bucket '%s': %w", bucket, err)
-			}
-		}
-		return nil
-	})
+	// No need to create buckets in read-only mode
 
-	if err != nil {
-		db.Close()
-		os.RemoveAll(tempDir) // Clean up on error
-		return nil, fmt.Errorf("failed to initialize db buckets: %w", err)
-	}
-
-	return &EphemeralBoltDB{
+	return &InitialDataReader{
 		db:         db,
 		tempDir:    tempDir,
-		tempFile:   tempFile,
 		bufferPool: &bytebufferpool.Pool{},
 	}, nil
 }
 
-// Close closes the database and removes temporary files.
-func (e *EphemeralBoltDB) Close() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+// Close closes the database reader and removes temporary files.
+func (r *InitialDataReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if e.db == nil {
+	if r.db == nil {
 		return nil // Already closed or not initialized
 	}
 
-	dbErr := e.db.Close()
-	e.db = nil // Prevent double close
+	dbErr := r.db.Close()
+	r.db = nil // Prevent double close
 
-	removeErr := os.RemoveAll(e.tempDir)
+	// Attempt to remove the temporary directory
+	removeErr := os.RemoveAll(r.tempDir)
 
 	if dbErr != nil {
-		return fmt.Errorf("error closing db: %w", dbErr)
+		return fmt.Errorf("error closing initial db reader: %w", dbErr)
 	}
 	if removeErr != nil {
-		return fmt.Errorf("error removing temp dir %s: %w", e.tempDir, removeErr)
+		// Log the error but don't necessarily fail the Close operation
+		log.Printf("Warning: error removing temp dir %s: %v", r.tempDir, removeErr)
 	}
 
 	return nil
 }
 
-// GetContent retrieves a content item by ID.
-// Returns the raw JSON data as []byte.
-func (e *EphemeralBoltDB) GetContent(id string) ([]byte, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+// LoadInitialContent reads all content items from the initial database.
+// Returns a map[string]models.Content for easy use in session storage.
+func (r *InitialDataReader) LoadInitialContent() (map[string]models.Content, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-	var contentData []byte
-
-	err := e.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(contentBucket))
-		if b == nil {
-			return fmt.Errorf("bucket '%s' not found", contentBucket)
-		}
-		val := b.Get([]byte(id))
-		if val != nil {
-			// Important: Copy the data, BoltDB values are only valid during the transaction.
-			contentData = make([]byte, len(val))
-			copy(contentData, val)
-		}
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
+	if r.db == nil {
+		return nil, fmt.Errorf("InitialDataReader database is not open")
 	}
 
-	if contentData == nil {
-		return nil, nil // Not found, but not an error
-	}
+	contentMap := make(map[string]models.Content)
 
-	return contentData, nil
-}
-
-// ListContent retrieves all content items.
-// Returns a slice of models.Content.
-func (e *EphemeralBoltDB) ListContent() ([]models.Content, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
-	var contents []models.Content
-
-	err := e.db.View(func(tx *bbolt.Tx) error {
+	err := r.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(contentBucket))
 		if b == nil {
-			return fmt.Errorf("bucket '%s' not found", contentBucket)
+			// If the initial DB doesn't have the bucket, return an empty map
+			log.Printf("Warning: Initial DB missing '%s' bucket", contentBucket)
+			return nil
 		}
 
 		return b.ForEach(func(k, v []byte) error {
 			var content models.Content
-			// Use a pooled buffer for potentially large JSON
-			buf := e.bufferPool.Get()
-			buf.Write(v) // Write data to buffer
+			// Create a copy of v because it's only valid during the transaction
+			dataCopy := make([]byte, len(v))
+			copy(dataCopy, v)
 
-			if err := json.Unmarshal(buf.Bytes(), &content); err != nil {
-				e.bufferPool.Put(buf) // Ensure buffer is returned on error
+			// Unmarshal the copied data
+			if err := json.Unmarshal(dataCopy, &content); err != nil {
 				// Log or handle the error for the specific item, maybe continue?
-				fmt.Fprintf(os.Stderr, "Error unmarshaling content %s: %v\n", string(k), err)
+				log.Printf("Error unmarshaling initial content %s: %v", string(k), err)
 				return nil // Continue processing other items
 			}
-			e.bufferPool.Put(buf) // Return buffer to pool
-
-			contents = append(contents, content)
+			contentMap[string(k)] = content
 			return nil
 		})
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error reading initial content: %w", err)
 	}
 
-	return contents, nil
+	log.Printf("Loaded %d items from initial database.", len(contentMap))
+	return contentMap, nil
 }
+
+/* --- Deprecated Write Operations ---
+   These functions are no longer needed as user data is stored in the session.
+
+// GetContent retrieves a content item by ID.
+// Returns the raw JSON data as []byte.
+func (e *EphemeralBoltDB) GetContent(id string) ([]byte, error) { ... }
+
+// ListContent retrieves all content items.
+// Returns a slice of models.Content.
+func (e *EphemeralBoltDB) ListContent() ([]models.Content, error) { ... }
 
 // CreateContent adds a new content item.
 // Takes ID and raw JSON data as []byte.
-func (e *EphemeralBoltDB) CreateContent(id string, data []byte) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	return e.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(contentBucket))
-		if b == nil {
-			return fmt.Errorf("bucket '%s' not found", contentBucket)
-		}
-		// Check if ID already exists? Depends on requirements.
-		// if b.Get([]byte(id)) != nil {
-		// 	 return fmt.Errorf("content with id '%s' already exists", id)
-		// }
-		return b.Put([]byte(id), data)
-	})
-}
+func (e *EphemeralBoltDB) CreateContent(id string, data []byte) error { ... }
 
 // UpdateContent updates an existing content item.
 // Takes ID and raw JSON data as []byte.
-func (e *EphemeralBoltDB) UpdateContent(id string, data []byte) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	return e.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(contentBucket))
-		if b == nil {
-			return fmt.Errorf("bucket '%s' not found", contentBucket)
-		}
-		// Check if item exists before updating
-		if b.Get([]byte(id)) == nil {
-			return fmt.Errorf("content with id '%s' not found", id)
-		}
-		return b.Put([]byte(id), data)
-	})
-}
+func (e *EphemeralBoltDB) UpdateContent(id string, data []byte) error { ... }
 
 // DeleteContent removes a content item by ID.
-func (e *EphemeralBoltDB) DeleteContent(id string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+func (e *EphemeralBoltDB) DeleteContent(id string) error { ... }
 
-	return e.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(contentBucket))
-		if b == nil {
-			return fmt.Errorf("bucket '%s' not found", contentBucket)
-		}
-		// Check if item exists before deleting
-		if b.Get([]byte(id)) == nil {
-			// Return nil or error depending on desired behavior for non-existent deletes
-			return nil // Idempotent delete
-			// return fmt.Errorf("content with id '%s' not found", id)
-		}
-		return b.Delete([]byte(id))
-	})
-}
+// ExportDatabase exports the entire database content.
+func (e *EphemeralBoltDB) ExportDatabase() (map[string]map[string]json.RawMessage, error) { ... }
 
-// ExportDatabase exports the entire database content as JSON.
-func (e *EphemeralBoltDB) ExportDatabase() (map[string]map[string]json.RawMessage, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+// ImportDatabase imports data into the database, replacing existing data.
+func (e *EphemeralBoltDB) ImportDatabase(importData map[string]map[string]json.RawMessage) error { ... }
 
-	exportData := make(map[string]map[string]json.RawMessage)
-
-	err := e.db.View(func(tx *bbolt.Tx) error {
-		return tx.ForEach(func(bucketName []byte, b *bbolt.Bucket) error {
-			bucketData := make(map[string]json.RawMessage)
-			err := b.ForEach(func(k, v []byte) error {
-				// Copy value as it's only valid during the transaction
-				valueCopy := make(json.RawMessage, len(v))
-				copy(valueCopy, v)
-				bucketData[string(k)] = valueCopy
-				return nil
-			})
-			if err != nil {
-				return fmt.Errorf("error iterating bucket %s: %w", bucketName, err)
-			}
-			exportData[string(bucketName)] = bucketData
-			return nil
-		})
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return exportData, nil
-}
-
-// ImportDatabase imports data from a JSON structure into the database.
-// WARNING: This typically replaces existing data in the specified buckets.
-func (e *EphemeralBoltDB) ImportDatabase(importData map[string]map[string]json.RawMessage) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	return e.db.Update(func(tx *bbolt.Tx) error {
-		for bucketName, bucketData := range importData {
-			// Check if bucket exists, optionally create it or return error
-			b := tx.Bucket([]byte(bucketName))
-			if b == nil {
-				// Option 1: Create bucket if not exists
-				var err error
-				b, err = tx.CreateBucketIfNotExists([]byte(bucketName))
-				if err != nil {
-					return fmt.Errorf("failed to create bucket '%s' during import: %w", bucketName, err)
-				}
-				// Option 2: Return error if bucket must pre-exist
-				// return fmt.Errorf("bucket '%s' not found during import", bucketName)
-			}
-
-			// Clear existing bucket content? Or merge? Currently replaces.
-			// If clearing is desired:
-			// if err := tx.DeleteBucket([]byte(bucketName)); err != nil {
-			// 	 return fmt.Errorf("failed to clear bucket '%s': %w", bucketName, err)
-			// }
-			// b, err = tx.CreateBucket([]byte(bucketName))
-			// if err != nil {
-			// 	 return fmt.Errorf("failed to recreate bucket '%s': %w", bucketName, err)
-			// }
-
-			for key, value := range bucketData {
-				if err := b.Put([]byte(key), value); err != nil {
-					return fmt.Errorf("failed to put key '%s' in bucket '%s': %w", key, bucketName, err)
-				}
-			}
-		}
-		return nil
-	})
-}
+*/

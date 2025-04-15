@@ -4,9 +4,11 @@ import (
 	"cms/internal/config"
 	"cms/internal/core"
 	"cms/internal/handlers"
+	"cms/internal/models"
 	"cms/internal/storage"
 
 	"embed"
+	"encoding/gob"
 	"log"
 	"os"
 	"runtime/debug"
@@ -41,6 +43,10 @@ func main() {
 	// Initialize configuration
 	cfg := config.Load()
 
+	// Register custom types for session encoding (gob)
+	gob.Register(models.Content{})
+	gob.Register(map[string]models.Content{})
+
 	// Initialize session management
 	// 1. Create provider
 	provider, err := memory.New(memory.Config{})
@@ -52,6 +58,8 @@ func main() {
 	sessionConfig.CookieName = "cms_sessionid" // Customize cookie name
 	sessionConfig.Expiration = 24 * time.Hour  // Set session expiration (e.g., 24 hours)
 	sessionConfig.Secure = false               // Set to true if using HTTPS
+	// sessionConfig.Encoder = fasthttpgob.Encoder // Explicitly use gob
+	// sessionConfig.Decoder = fasthttpgob.Decoder // Explicitly use gob
 	// 3. Create session manager
 	sess := session.New(sessionConfig)
 	// 4. Set provider for the session manager
@@ -59,12 +67,20 @@ func main() {
 		log.Fatalf("Failed to set session provider: %v", err)
 	}
 
-	// Initialize ephemeral BoltDB (path is relative to embed FS root)
-	db, errDb := storage.NewEphemeralBoltDB(assets, "assets/db/initial.db")
+	// Initialize Initial Data Reader
+	initialDataReader, errDb := storage.NewInitialDataReader(assets, "assets/db/initial.db")
 	if errDb != nil {
-		log.Fatalf("Failed to initialize database: %v", errDb)
+		log.Fatalf("Failed to initialize initial data reader: %v", errDb)
 	}
-	defer db.Close()
+	// Load initial data once at the start
+	initialContent, errLoad := initialDataReader.LoadInitialContent()
+	if errLoad != nil {
+		log.Fatalf("Failed to load initial content: %v", errLoad)
+	}
+	// Close the reader immediately after loading, we don't need the BoltDB file open anymore.
+	if errClose := initialDataReader.Close(); errClose != nil {
+		log.Printf("Warning: Failed to close initial data reader cleanly: %v", errClose)
+	}
 
 	// Initialize router
 	router := core.NewRouter()
@@ -73,16 +89,16 @@ func main() {
 	// staticHandler := handlers.NewStaticHandler(assets, "assets/static")
 	// router.GET("/static/*filepath", staticHandler.Handle)
 
-	// API handlers for CRUD operations (pass session manager and config)
-	crudHandler := handlers.NewCRUDHandler(db, sess, cfg)
+	// API handlers for CRUD operations (Now need initialContent for cloning)
+	crudHandler := handlers.NewCRUDHandler(sess, cfg, initialContent)
 	router.GET("/api/content", crudHandler.List)
 	router.GET("/api/content/{id}", crudHandler.Get)
 	router.POST("/api/content", crudHandler.Create)
 	router.PUT("/api/content/{id}", crudHandler.Update)
 	router.DELETE("/api/content/{id}", crudHandler.Delete)
 
-	// HTML page handlers using templates (pass session manager and config)
-	pageHandler := handlers.NewPageHandler(db, sess, cfg)
+	// HTML page handlers using templates (Now need initialContent for cloning)
+	pageHandler := handlers.NewPageHandler(sess, cfg, initialContent)
 	router.GET("/", pageHandler.Index) // Public route
 	// Login/Logout routes are now implemented
 	router.GET("/login", pageHandler.Login)      // Login form route
@@ -107,7 +123,7 @@ func main() {
 	// Note: static file handling might need adjustment depending on how they are served.
 	// If served via a separate handler before the router, AuthMiddleware might not see /static/ paths.
 	// Ensure public paths in AuthMiddleware match your routing setup.
-	authHandler := handlers.AuthMiddleware(router.Handler, sess, cfg)
+	authMiddleware := handlers.AuthMiddleware(router.Handler, sess, cfg)
 
 	// Start time tracking (relevant if using timing middleware)
 	startTime := time.Now()
@@ -123,7 +139,7 @@ func main() {
 	// Start the server
 	server := &fasthttp.Server{
 		// Use the authentication middleware as the main handler
-		Handler: authHandler,
+		Handler: authMiddleware,
 		// Handler: timedAuthHandler, // Uncomment if using timing middleware
 		Name: "cms",
 		// Fasthttp optimizations

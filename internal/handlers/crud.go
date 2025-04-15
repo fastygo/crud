@@ -8,11 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"strings"
 	"time"
 
 	"cms/internal/config"
-	"cms/internal/storage"
+	"cms/internal/models"
 
 	session "github.com/fasthttp/session/v2"
 	"github.com/valyala/fasthttp"
@@ -21,42 +20,138 @@ import (
 
 // CRUDHandler handles API requests for content management.
 type CRUDHandler struct {
-	db         *storage.EphemeralBoltDB
-	sess       *session.Session
-	cfg        *config.Config
-	parserPool fastjson.ParserPool // Use a pool for fastjson parsers
+	sess           *session.Session
+	cfg            *config.Config
+	initialContent map[string]models.Content // Added initial content map
+	parserPool     fastjson.ParserPool
 }
 
 // NewCRUDHandler creates a new CRUD handler.
-func NewCRUDHandler(db *storage.EphemeralBoltDB, sess *session.Session, cfg *config.Config) *CRUDHandler {
+func NewCRUDHandler(sess *session.Session, cfg *config.Config, initialContent map[string]models.Content) *CRUDHandler {
 	return &CRUDHandler{
-		db:   db,
-		sess: sess,
-		cfg:  cfg,
+		sess:           sess,
+		cfg:            cfg,
+		initialContent: initialContent,
 		// parserPool is implicitly initialized
 	}
 }
 
-// List handles GET /api/content - lists all content items.
-func (h *CRUDHandler) List(ctx *fasthttp.RequestCtx) {
-	contents, err := h.db.ListContent()
+// Helper function to get user's content map from session or initialize it
+func (h *CRUDHandler) getUserContent(ctx *fasthttp.RequestCtx) (map[string]models.Content, error) {
+	store, err := h.sess.Get(ctx)
 	if err != nil {
-		log.Printf("Error listing content: %v", err)
+		return nil, fmt.Errorf("failed to get session: %w", err)
+	}
+
+	contentData := store.Get("user_content")
+	if contentData == nil {
+		// Not initialized, clone initial data and serialize to JSON
+		log.Println("getUserContent (CRUD): Initializing user content in session")
+		userContent := make(map[string]models.Content, len(h.initialContent))
+		for k, v := range h.initialContent {
+			userContent[k] = v // Shallow copy is okay if Content struct fields are simple types or immutable
+		}
+		// Serialize content to JSON bytes for storage
+		jsonBytes, err := json.Marshal(userContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal content for session: %w", err)
+		}
+		// Store the JSON rather than direct object
+		store.Set("user_content", jsonBytes)
+		// We need to save the session *now* so subsequent gets in the same request see it
+		if err := h.sess.Save(ctx, store); err != nil {
+			return nil, fmt.Errorf("failed to save session after initializing content: %w", err)
+		}
+		return userContent, nil
+	}
+
+	// Now handle different types that might be in session
+	var userContent map[string]models.Content
+
+	switch v := contentData.(type) {
+	case []byte:
+		// This is our expected format - JSON bytes
+		if err := json.Unmarshal(v, &userContent); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal content bytes from session: %w", err)
+		}
+	case string:
+		// Handle if somehow stored as string
+		if err := json.Unmarshal([]byte(v), &userContent); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal content string from session: %w", err)
+		}
+	case map[string]interface{}:
+		// Handle case where session serialization might change types
+		log.Println("getUserContent (CRUD): Attempting conversion from map[string]interface{}")
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal map[string]interface{} for conversion: %w", err)
+		}
+		if err := json.Unmarshal(b, &userContent); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal into map[string]models.Content: %w", err)
+		}
+		// Update session with bytes to prevent future type conversions
+		jsonBytes, err := json.Marshal(userContent)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal content for session update: %w", err)
+		}
+		store.Set("user_content", jsonBytes)
+		if err := h.sess.Save(ctx, store); err != nil {
+			log.Printf("Warning: failed to update session after type conversion: %v", err)
+			// Non-fatal
+		}
+	default:
+		return nil, fmt.Errorf("unexpected type for user_content in session: %T", contentData)
+	}
+
+	return userContent, nil
+}
+
+// Helper function to save user's content map back to session
+func (h *CRUDHandler) saveUserContent(ctx *fasthttp.RequestCtx, userContent map[string]models.Content) error {
+	store, err := h.sess.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get session for saving: %w", err)
+	}
+
+	// Serialize to JSON bytes instead of storing the object directly
+	jsonBytes, err := json.Marshal(userContent)
+	if err != nil {
+		return fmt.Errorf("failed to marshal content map for session: %w", err)
+	}
+
+	store.Set("user_content", jsonBytes)
+	if err := h.sess.Save(ctx, store); err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	return nil
+}
+
+// List handles GET /api/content - lists all content items for the user.
+func (h *CRUDHandler) List(ctx *fasthttp.RequestCtx) {
+	userContent, err := h.getUserContent(ctx)
+	if err != nil {
+		log.Printf("CRUD List: Error getting user content: %v", err)
 		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		return
 	}
 
+	// Convert map to slice for response
+	contents := make([]models.Content, 0, len(userContent))
+	for _, item := range userContent {
+		contents = append(contents, item)
+	}
+	// TODO: Add sorting if needed
+
 	ctx.SetContentType("application/json; charset=utf-8")
 	if err := json.NewEncoder(ctx).Encode(contents); err != nil {
-		log.Printf("Error encoding content list: %v", err)
-		// Error is already set by json.NewEncoder potentially
-		if !ctx.Response.Header.IsHTTP11() { // Avoid setting error if already set
+		log.Printf("CRUD List: Error encoding content list: %v", err)
+		if !ctx.Response.Header.IsHTTP11() {
 			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		}
 	}
 }
 
-// Get handles GET /api/content/{id} - retrieves a specific content item.
+// Get handles GET /api/content/{id} - retrieves a specific content item for the user.
 func (h *CRUDHandler) Get(ctx *fasthttp.RequestCtx) {
 	id, ok := ctx.UserValue("id").(string)
 	if !ok || id == "" {
@@ -64,20 +159,284 @@ func (h *CRUDHandler) Get(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
-	contentData, err := h.db.GetContent(id)
+	userContent, err := h.getUserContent(ctx)
 	if err != nil {
-		log.Printf("Error getting content %s: %v", id, err)
+		log.Printf("CRUD Get: Error getting user content for id %s: %v", id, err)
 		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
 		return
 	}
 
-	if contentData == nil {
+	item, found := userContent[id]
+	if !found {
 		ctx.Error("Content not found", fasthttp.StatusNotFound)
 		return
 	}
 
 	ctx.SetContentType("application/json; charset=utf-8")
-	ctx.Write(contentData)
+	if err := json.NewEncoder(ctx).Encode(item); err != nil {
+		log.Printf("CRUD Get: Error encoding item %s: %v", id, err)
+		if !ctx.Response.Header.IsHTTP11() {
+			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		}
+	}
+}
+
+// Create handles POST /api/content - creates a new content item in the user's session.
+func (h *CRUDHandler) Create(ctx *fasthttp.RequestCtx) {
+	userContent, err := h.getUserContent(ctx)
+	if err != nil {
+		log.Printf("CRUD Create: Error getting user content: %v", err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	// Check limit
+	if len(userContent) >= 50 {
+		log.Printf("CRUD Create: User content limit (50) reached.")
+		ctx.Error("Content limit reached. Please delete items before adding more.", fasthttp.StatusConflict) // 409 Conflict
+		return
+	}
+
+	id, err := generateID()
+	if err != nil {
+		log.Printf("CRUD Create: Error generating ID: %v", err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	body := ctx.PostBody()
+	if len(body) == 0 {
+		ctx.Error("Request body is empty", fasthttp.StatusBadRequest)
+		return
+	}
+
+	var newItem models.Content
+	if err := json.Unmarshal(body, &newItem); err != nil {
+		ctx.Error("Invalid JSON data: "+err.Error(), fasthttp.StatusBadRequest)
+		return
+	}
+
+	// Set mandatory fields
+	now := time.Now().UTC()
+	newItem.ID = id
+	newItem.CreatedAt = now
+	newItem.UpdatedAt = now
+	if newItem.Status == "" {
+		newItem.Status = "draft"
+	}
+	// TODO: Add more validation
+
+	userContent[id] = newItem
+
+	if err := h.saveUserContent(ctx, userContent); err != nil {
+		log.Printf("CRUD Create: Error saving user content for id %s: %v", id, err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetContentType("application/json; charset=utf-8")
+	ctx.SetStatusCode(fasthttp.StatusCreated)
+	fmt.Fprintf(ctx, `{"id":"%s"}`, id)
+}
+
+// Update handles PUT /api/content/{id} - updates an item in the user's session.
+func (h *CRUDHandler) Update(ctx *fasthttp.RequestCtx) {
+	id, ok := ctx.UserValue("id").(string)
+	if !ok || id == "" {
+		ctx.Error("Missing or invalid content ID", fasthttp.StatusBadRequest)
+		return
+	}
+
+	userContent, err := h.getUserContent(ctx)
+	if err != nil {
+		log.Printf("CRUD Update: Error getting user content for id %s: %v", id, err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	_, found := userContent[id]
+	if !found {
+		ctx.Error("Content not found", fasthttp.StatusNotFound)
+		return
+	}
+
+	body := ctx.PostBody()
+	if len(body) == 0 {
+		ctx.Error("Request body is empty", fasthttp.StatusBadRequest)
+		return
+	}
+
+	var updatedItem models.Content
+	if err := json.Unmarshal(body, &updatedItem); err != nil {
+		ctx.Error("Invalid JSON data: "+err.Error(), fasthttp.StatusBadRequest)
+		return
+	}
+
+	// Preserve original CreatedAt, ensure ID matches, set UpdatedAt
+	originalItem := userContent[id]
+	updatedItem.ID = id                            // Ensure ID is correct
+	updatedItem.CreatedAt = originalItem.CreatedAt // Keep original creation time
+	updatedItem.UpdatedAt = time.Now().UTC()
+	// TODO: More validation
+
+	userContent[id] = updatedItem
+
+	if err := h.saveUserContent(ctx, userContent); err != nil {
+		log.Printf("CRUD Update: Error saving user content for id %s: %v", id, err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetStatusCode(fasthttp.StatusNoContent)
+}
+
+// Delete handles DELETE /api/content/{id} - deletes an item from the user's session.
+func (h *CRUDHandler) Delete(ctx *fasthttp.RequestCtx) {
+	id, ok := ctx.UserValue("id").(string)
+	if !ok || id == "" {
+		ctx.Error("Missing or invalid content ID", fasthttp.StatusBadRequest)
+		return
+	}
+
+	userContent, err := h.getUserContent(ctx)
+	if err != nil {
+		log.Printf("CRUD Delete: Error getting user content for id %s: %v", id, err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	_, found := userContent[id]
+	if !found {
+		ctx.Error("Content not found", fasthttp.StatusNotFound)
+		return
+	}
+
+	delete(userContent, id)
+
+	if err := h.saveUserContent(ctx, userContent); err != nil {
+		log.Printf("CRUD Delete: Error saving user content after deleting id %s: %v", id, err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	ctx.SetStatusCode(fasthttp.StatusNoContent)
+}
+
+// ExportJSON handles POST /api/export - exports the user's session content.
+func (h *CRUDHandler) ExportJSON(ctx *fasthttp.RequestCtx) {
+	userContent, err := h.getUserContent(ctx)
+	if err != nil {
+		log.Printf("CRUD Export: Error getting user content: %v", err)
+		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	// Prepare data in the original export format (map bucket -> map id -> data)
+	exportData := map[string]map[string]json.RawMessage{
+		"content": make(map[string]json.RawMessage),
+	}
+	for id, item := range userContent {
+		itemJSON, err := json.Marshal(item)
+		if err != nil {
+			log.Printf("CRUD Export: Error marshaling item %s: %v", id, err)
+			// Skip this item or return error?
+			continue // Skipping for now
+		}
+		exportData["content"][id] = itemJSON
+	}
+
+	ctx.SetContentType("application/json; charset=utf-8")
+	ctx.Response.Header.Set("Content-Disposition", `attachment; filename="cms_export_`+time.Now().UTC().Format("20060102_150405")+`.json"`)
+
+	if err := json.NewEncoder(ctx).Encode(exportData); err != nil {
+		log.Printf("CRUD Export: Error encoding database export: %v", err)
+		if !ctx.Response.Header.IsHTTP11() {
+			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
+		}
+	}
+}
+
+// ImportJSON handles POST /api/import - imports data into the user's session.
+// WARNING: This replaces existing session data.
+func (h *CRUDHandler) ImportJSON(ctx *fasthttp.RequestCtx) {
+	if !ctx.IsPost() || !bytes.Contains(ctx.Request.Header.ContentType(), []byte("multipart/form-data")) {
+		ctx.Error("Invalid request method or content type. Use POST with multipart/form-data.", fasthttp.StatusBadRequest)
+		return
+	}
+
+	form, err := ctx.MultipartForm()
+	if err != nil {
+		log.Printf("ImportJSON: Error parsing multipart form: %v", err)
+		ctx.Error("Failed to parse multipart form: "+err.Error(), fasthttp.StatusBadRequest)
+		return
+	}
+
+	fileHeaders := form.File["importFile"]
+	if len(fileHeaders) == 0 {
+		ctx.Error("No file uploaded with name 'importFile'", fasthttp.StatusBadRequest)
+		return
+	}
+	fileHeader := fileHeaders[0]
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		log.Printf("ImportJSON: Error opening uploaded file: %v", err)
+		ctx.Error("Failed to open uploaded file", fasthttp.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	fileBytes, err := io.ReadAll(file)
+	if err != nil {
+		log.Printf("ImportJSON: Error reading uploaded file: %v", err)
+		ctx.Error("Failed to read uploaded file", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	var importFormat map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(fileBytes, &importFormat); err != nil {
+		log.Printf("ImportJSON: Error unmarshaling import JSON from file: %v", err)
+		ctx.Error("Invalid JSON format in uploaded file: "+err.Error(), fasthttp.StatusBadRequest)
+		return
+	}
+
+	// Extract content bucket data
+	contentBucketData, ok := importFormat["content"]
+	if !ok {
+		log.Printf("ImportJSON: '%s' bucket not found in imported file.", "content")
+		ctx.Error(fmt.Sprintf("Invalid import file: '%s' bucket missing.", "content"), fasthttp.StatusBadRequest)
+		return
+	}
+
+	// Check limit before processing
+	if len(contentBucketData) > 50 {
+		log.Printf("ImportJSON: Import exceeds content limit (50). Found %d items.", len(contentBucketData))
+		ctx.Error(fmt.Sprintf("Import failed: File contains %d items, exceeding the limit of 50.", len(contentBucketData)), fasthttp.StatusConflict)
+		return
+	}
+
+	// Convert RawMessage map to models.Content map
+	importedContent := make(map[string]models.Content, len(contentBucketData))
+	for id, rawData := range contentBucketData {
+		var item models.Content
+		if err := json.Unmarshal(rawData, &item); err != nil {
+			log.Printf("ImportJSON: Error unmarshaling item %s: %v", id, err)
+			ctx.Error(fmt.Sprintf("Error processing item '%s' in import file: %v", id, err), fasthttp.StatusBadRequest)
+			return
+		}
+		// Optional: Validate imported item further?
+		importedContent[id] = item
+	}
+
+	// Save the imported content map to the session, replacing existing
+	if err := h.saveUserContent(ctx, importedContent); err != nil {
+		log.Printf("ImportJSON: Error saving imported content to session: %v", err)
+		ctx.Error("Internal Server Error during import save", fasthttp.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("ImportJSON: Successfully imported %d items into session.", len(importedContent))
+	ctx.Redirect("/content?imported=true", fasthttp.StatusSeeOther)
 }
 
 // generateID creates a cryptographically secure random hex ID.
@@ -87,249 +446,6 @@ func generateID() (string, error) {
 		return "", fmt.Errorf("failed to generate random ID: %w", err)
 	}
 	return hex.EncodeToString(idBytes), nil
-}
-
-// Create handles POST /api/content - creates a new content item.
-func (h *CRUDHandler) Create(ctx *fasthttp.RequestCtx) {
-	id, err := generateID()
-	if err != nil {
-		log.Printf("Error generating ID for new content: %v", err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	body := ctx.PostBody()
-	if len(body) == 0 {
-		ctx.Error("Request body is empty", fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Validate JSON structure using fastjson from the pool
-	p := h.parserPool.Get()
-	_, err = p.ParseBytes(body) // Use ParseBytes for efficiency
-	if err != nil {
-		h.parserPool.Put(p)
-		ctx.Error("Invalid JSON format: "+err.Error(), fasthttp.StatusBadRequest)
-		return
-	}
-
-	// --- Data Enrichment & Validation ---
-	// Unmarshal into a map or struct to add/modify fields
-	var contentMap map[string]interface{}
-	if err := json.Unmarshal(body, &contentMap); err != nil {
-		h.parserPool.Put(p)
-		log.Printf("Error unmarshaling body for create: %v", err)
-		ctx.Error("Invalid JSON data", fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Set mandatory fields
-	now := time.Now().UTC()
-	contentMap["id"] = id
-	contentMap["created_at"] = now
-	contentMap["updated_at"] = now
-	if _, ok := contentMap["status"]; !ok {
-		contentMap["status"] = "draft" // Default status
-	}
-	// TODO: Add more robust validation (required fields, types, formats)
-
-	// Re-marshal the enriched/validated data
-	enrichedBody, err := json.Marshal(contentMap)
-	if err != nil {
-		h.parserPool.Put(p)
-		log.Printf("Error marshaling enriched data for create: %v", err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	// --- Release fastjson parser ---
-	h.parserPool.Put(p) // Release parser back to the pool
-
-	// Save to database
-	if err := h.db.CreateContent(id, enrichedBody); err != nil {
-		log.Printf("Error creating content %s: %v", id, err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	ctx.SetContentType("application/json; charset=utf-8")
-	ctx.SetStatusCode(fasthttp.StatusCreated)
-	fmt.Fprintf(ctx, `{"id":"%s"}`, id) // Return only the ID
-}
-
-// Update handles PUT /api/content/{id} - updates an existing content item.
-func (h *CRUDHandler) Update(ctx *fasthttp.RequestCtx) {
-	id, ok := ctx.UserValue("id").(string)
-	if !ok || id == "" {
-		ctx.Error("Missing or invalid content ID", fasthttp.StatusBadRequest)
-		return
-	}
-
-	body := ctx.PostBody()
-	if len(body) == 0 {
-		ctx.Error("Request body is empty", fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Validate JSON structure
-	p := h.parserPool.Get()
-	_, err := p.ParseBytes(body)
-	if err != nil {
-		h.parserPool.Put(p)
-		ctx.Error("Invalid JSON format: "+err.Error(), fasthttp.StatusBadRequest)
-		return
-	}
-
-	// --- Data Enrichment & Validation ---
-	var contentMap map[string]interface{}
-	if err := json.Unmarshal(body, &contentMap); err != nil {
-		h.parserPool.Put(p)
-		log.Printf("Error unmarshaling body for update %s: %v", id, err)
-		ctx.Error("Invalid JSON data", fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Ensure ID matches and set updated_at
-	contentMap["id"] = id // Overwrite ID in body if present
-	contentMap["updated_at"] = time.Now().UTC()
-	// TODO: Add more robust validation
-
-	// Re-marshal the enriched/validated data
-	enrichedBody, err := json.Marshal(contentMap)
-	if err != nil {
-		h.parserPool.Put(p)
-		log.Printf("Error marshaling enriched data for update %s: %v", id, err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
-	}
-	h.parserPool.Put(p) // Release parser
-
-	// Save to database
-	if err := h.db.UpdateContent(id, enrichedBody); err != nil {
-		if strings.Contains(err.Error(), "not found") { // Check specific error from storage
-			ctx.Error("Content not found", fasthttp.StatusNotFound)
-		} else {
-			log.Printf("Error updating content %s: %v", id, err)
-			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		}
-		return
-	}
-
-	ctx.SetStatusCode(fasthttp.StatusNoContent) // Or StatusOK with updated content body
-}
-
-// Delete handles DELETE /api/content/{id} - deletes a content item.
-func (h *CRUDHandler) Delete(ctx *fasthttp.RequestCtx) {
-	id, ok := ctx.UserValue("id").(string)
-	if !ok || id == "" {
-		ctx.Error("Missing or invalid content ID", fasthttp.StatusBadRequest)
-		return
-	}
-
-	if err := h.db.DeleteContent(id); err != nil {
-		// Check if the error indicates "not found" - depends on storage implementation
-		// If DeleteContent returns an error for not found, handle it.
-		// If it's idempotent (no error for not found), this check might not be needed.
-		if strings.Contains(err.Error(), "not found") { // Example check
-			ctx.Error("Content not found", fasthttp.StatusNotFound)
-		} else {
-			log.Printf("Error deleting content %s: %v", id, err)
-			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		}
-		return
-	}
-
-	ctx.SetStatusCode(fasthttp.StatusNoContent)
-}
-
-// ExportJSON handles POST /api/export - exports the database content.
-func (h *CRUDHandler) ExportJSON(ctx *fasthttp.RequestCtx) {
-	exportData, err := h.db.ExportDatabase()
-	if err != nil {
-		log.Printf("Error exporting database: %v", err)
-		ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	ctx.SetContentType("application/json; charset=utf-8")
-	// Set header for file download
-	ctx.Response.Header.Set("Content-Disposition", `attachment; filename="cms_export_`+time.Now().UTC().Format("20060102_150405")+`.json"`)
-
-	if err := json.NewEncoder(ctx).Encode(exportData); err != nil {
-		log.Printf("Error encoding database export: %v", err)
-		// Error might already be set
-		if !ctx.Response.Header.IsHTTP11() {
-			ctx.Error("Internal Server Error", fasthttp.StatusInternalServerError)
-		}
-	}
-}
-
-// ImportJSON handles POST /api/import - imports data into the database.
-// WARNING: This replaces existing data.
-func (h *CRUDHandler) ImportJSON(ctx *fasthttp.RequestCtx) {
-	// Check if it's a multipart/form-data request
-	if !ctx.IsPost() || !bytes.Contains(ctx.Request.Header.ContentType(), []byte("multipart/form-data")) {
-		ctx.Error("Invalid request method or content type. Use POST with multipart/form-data.", fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Parse the multipart form
-	form, err := ctx.MultipartForm()
-	if err != nil {
-		log.Printf("Error parsing multipart form: %v", err)
-		ctx.Error("Failed to parse multipart form: "+err.Error(), fasthttp.StatusBadRequest)
-		return
-	}
-	// No need to explicitly release the form in fasthttp
-
-	// Get the file from the form (field name 'importFile' from header.qtpl)
-	fileHeaders := form.File["importFile"]
-	if len(fileHeaders) == 0 {
-		ctx.Error("No file uploaded with name 'importFile'", fasthttp.StatusBadRequest)
-		return
-	}
-	if len(fileHeaders) > 1 {
-		ctx.Error("Multiple files uploaded with name 'importFile', expected one", fasthttp.StatusBadRequest)
-		return
-	}
-	fileHeader := fileHeaders[0]
-
-	// Open the uploaded file
-	file, err := fileHeader.Open()
-	if err != nil {
-		log.Printf("Error opening uploaded file: %v", err)
-		ctx.Error("Failed to open uploaded file", fasthttp.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	// Read the file content
-	fileBytes, err := io.ReadAll(file)
-	if err != nil {
-		log.Printf("Error reading uploaded file: %v", err)
-		ctx.Error("Failed to read uploaded file", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	// Now parse the JSON from the file content
-	var importData map[string]map[string]json.RawMessage
-	if err := json.Unmarshal(fileBytes, &importData); err != nil {
-		log.Printf("Error unmarshaling import JSON from file: %v", err)
-		// Optionally log part of the fileBytes for debugging
-		// log.Printf("Invalid JSON content: %s", string(fileBytes[:min(len(fileBytes), 500)]))
-		ctx.Error("Invalid JSON format in uploaded file: "+err.Error(), fasthttp.StatusBadRequest)
-		return
-	}
-
-	// Import data into the database
-	if err := h.db.ImportDatabase(importData); err != nil {
-		log.Printf("Error importing database: %v", err)
-		ctx.Error("Internal Server Error during import", fasthttp.StatusInternalServerError)
-		return
-	}
-
-	// Redirect to the content list page upon successful import
-	ctx.Redirect("/content?imported=true", fasthttp.StatusSeeOther) // Use 303 See Other
 }
 
 // Helper to get the buffer pool from context if needed, although not used in this version.

@@ -15,3 +15,9 @@ type LoginData struct {
 // ViewData defined elsewhere
 // NewData defined elsewhere
 // EditData defined elsewhere
+
+// IndexData contains data specific to the index/home page template.
+// type IndexData struct {
+// 	BasePageData
+// 	// Add any index-page specific fields here if needed in the future
+// }
