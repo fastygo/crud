@@ -150,3 +150,192 @@
 - ✅ **Полная анонимность** - никаких трекингов
 
 **Все эти платформы позволят вам создать полностью изолированную систему SSO/IAM, которая работает как "черный ящик" в любой стране мира. 🚀**
+
+=========================
+
+## ETC
+
+[7 tools called]
+
+## 🔍 **Детальный анализ: Authelia, ZITADEL, Casdoor, FusionAuth, Ory Kratos vs Logto OSS**
+
+Для **Go-based SSO + User Management** системы я проанализировал все упомянутые платформы. Вот объективное сравнение:
+
+---
+
+## 📊 **МАТРИЦА СРАВНЕНИЯ**
+
+| Критерий | **Authelia** | **ZITADEL** | **Casdoor** | **FusionAuth** | **Ory Kratos** | **Logto OSS** |
+|-----------|-------------|-------------|-------------|----------------|----------------|---------------|
+| **Язык** | Go | Go | Go | Java | Go | Node.js/TypeScript |
+| **Лицензия** | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 | MPL-2.0 |
+| **Архитектура** | Standalone | Microservices | Monolithic | Monolithic | Microservices | Full-stack |
+| **БД** | SQLite/PostgreSQL/MySQL | CockroachDB/PostgreSQL | MySQL/PostgreSQL | PostgreSQL/MySQL | PostgreSQL/MySQL | PostgreSQL |
+| **SSO Протоколы** | OIDC, SAML | OIDC, SAML | OAuth2, OIDC, SAML | OAuth2, OIDC, SAML | OIDC, OAuth2 | OIDC, OAuth2 |
+| **MFA/2FA** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Admin UI** | Basic | Modern | Rich | Full-featured | Headless | Built-in |
+| **Go SDK** | ⚠️ Limited | ✅ Official | ✅ Official | ⚠️ Community | ✅ Official | ⚠️ Community |
+
+---
+
+## 🎯 **ПОДРОБНЫЙ АНАЛИЗ КАЖДОЙ ПЛАТФОРМЫ**
+
+### 1️⃣ **Authelia** - Классический Go SSO
+**Сильные стороны:**
+- **100% Go** - чистый, эффективный код
+- **Reverse proxy integration** - работает через Traefik/Nginx
+- **Security-first** - TOTP, WebAuthn, YubiKey
+- **Resource efficient** - минимальные требования
+- **Community** - зрелая экосистема
+
+**Слабые стороны:**
+- **Basic UI** - примитивный веб-интерфейс
+- **Limited user management** - больше SSO чем полное IAM
+- **Configuration heavy** - много YAML файлов
+
+**Для Go проекта:** ⭐⭐⭐⭐
+**Лучше всего для:** Simple SSO с 2FA
+
+---
+
+### 2️⃣ **ZITADEL** - Современное Go IAM
+**Сильные стороны:**
+- **Cloud-native** - Kubernetes-first дизайн
+- **Event sourcing** - надежная архитектура
+- **gRPC API** - высокая производительность
+- **Multi-tenancy** - изоляция организаций
+- **Go SDK** - официальная поддержка
+
+**Слабые стороны:**
+- **Complex deployment** - требует Kubernetes
+- **Learning curve** - много концепций
+- **Resource intensive** - больше компонентов
+
+**Для Go проекта:** ⭐⭐⭐⭐⭐
+**Лучше всего для:** Enterprise-grade IAM
+
+---
+
+### 3️⃣ **Casdoor** - UI-First Go IAM
+**Сильные стороны:**
+- **Beautiful admin UI** - современный интерфейс
+- **OAuth providers** - 100+ интеграций
+- **LDAP/SAML support** - enterprise connectors
+- **Theme customization** - брендирование
+- **Go SDK** - официальный
+
+**Слабые стороны:**
+- **UI heavy** - зависит от веб-интерфейса
+- **Performance** - не самая быстрая
+- **Less mature** - молодая платформа
+
+**Для Go проекта:** ⭐⭐⭐⭐
+**Лучше всего для:** User-friendly IAM с красивым UI
+
+---
+
+### 4️⃣ **FusionAuth** - Complete Java Auth Platform
+**Сильные стороны:**
+- **Feature complete** - все что нужно из коробки
+- **Advanced workflows** - registration flows, themes
+- **Enterprise support** - SLA и поддержка
+- **Multi-language** - Java, но с SDK для Go
+- **Documentation** - отличная
+
+**Слабые стороны:**
+- **Java-based** - не Go native
+- **Resource heavy** - больше RAM/CPU
+- **Commercial focus** - enterprise pricing модель
+
+**Для Go проекта:** ⭐⭐⭐
+**Лучше всего для:** Feature-rich решения
+
+---
+
+### 5️⃣ **Ory Kratos** - Headless Go Identity
+**Сильные стороны:**
+- **API-first** - чистый headless подход
+- **Composable** - часть Ory экосистемы
+- **Cloud-native** - Kubernetes optimized
+- **Go SDK** - официальный
+- **Flexible** - customization через API
+
+**Слабые стороны:**
+- **Headless** - нет встроенного UI
+- **Complex setup** - много компонентов
+- **Ecosystem lock-in** - зависит от Ory
+
+**Для Go проекта:** ⭐⭐⭐⭐⭐
+**Лучше всего для:** API-first интеграции
+
+---
+
+### 6️⃣ **Logto OSS** - Modern Node.js Auth
+**Сильные стороны:**
+- **Modern stack** - Node.js + React
+- **Built-in admin** - готовый UI
+- **Social logins** - простая настройка
+- **Developer experience** - отличная DX
+- **Active development** - частые обновления
+
+**Слабые стороны:**
+- **Node.js** - не Go native
+- **Resource usage** - больше памяти
+- **Less mature** - молодая платформа
+
+**Для Go проекта:** ⭐⭐⭐
+**Лучше всего для:** Modern web applications
+
+---
+
+## 🏆 **ТОП РЕКОМЕНДАЦИЙ ДЛЯ GO ПРОЕКТА**
+
+### **🥇 ZITADEL** - Лучший выбор для Go
+```
+Почему:
+✅ 100% Go native
+✅ Cloud-native architecture  
+✅ Official Go SDK
+✅ Enterprise-grade features
+✅ Event sourcing reliability
+```
+
+### **🥈 Ory Kratos** - Для API-first подхода
+```
+Почему:
+✅ Go native
+✅ Headless architecture
+✅ Composable ecosystem
+✅ Official Go SDK
+✅ Cloud-native design
+```
+
+### **🥉 Authelia** - Для простого SSO
+```
+Почему:
+✅ 100% Go
+✅ Lightweight
+✅ Security focused
+✅ Easy integration
+✅ Mature community
+```
+
+---
+
+## 🎯 **ФИНАЛЬНЫЕ РЕКОМЕНДАЦИИ**
+
+### **Для вашего проекта (Go-based CMS с разделением PII):**
+
+1. **Если нужен enterprise-grade IAM** → **ZITADEL**
+2. **Если нужен headless API** → **Ory Kratos**  
+3. **Если нужен простой SSO** → **Authelia**
+4. **Если нужен красивый UI** → **Casdoor**
+5. **Если не принципиален язык** → **FusionAuth** или **Logto OSS**
+
+### **Ключевые факторы выбора:**
+- **ZITADEL** и **Ory Kratos** - лучшие для pure Go экосистемы
+- **Authelia** - самая легкая и безопасная
+- **Casdoor** - самая user-friendly
+- **FusionAuth** - самая feature-complete
+- **Logto OSS** - самая modern
+
