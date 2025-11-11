@@ -1,0 +1,13 @@
+- [ ] Revise roadmap for simplified WorkOS-like (ZITADEL+Supabase+UI8Kit)
+- [ ] Decide ZITADEL deployment strategy (Cloud vs self-host) and regions
+- [ ] Provision Supabase for metadata (tenants, apps, providers, webhooks)
+- [ ] Configure ZITADEL orgs/projects/apps via management API
+- [ ] Build embeddable auth widget and theming
+- [ ] Add provider connectors (Google, GitHub, Microsoft) UI
+- [ ] Ship SDKs and quickstarts (Node/Next.js, Go) for OIDC
+- [ ] Implement event webhooks for login/user lifecycle
+- [ ] Write docs: setup, provider guides, runbooks
+- [ ] Package with Docker Compose and Helm charts
+- [ ] Release CLI to manage tenants/apps/providers
+- [ ] Set up basic monitoring and alerting
+- [ ] Publish demo storefront using the widget and SDKs
